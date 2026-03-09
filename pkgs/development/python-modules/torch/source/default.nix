@@ -748,6 +748,9 @@ buildPythonPackage.override { inherit stdenv; } (finalAttrs: {
       unroll-src
       ;
     cudaCapabilities = if cudaSupport then supportedCudaCapabilities else [ ];
+    # Shared ROCm infrastructure for downstream packages (torchaudio, torchvision, etc.)
+    inherit gpuTargetString;
+    inherit rocmtoolkit_joined;
     # At least for 1.10.2 `torch.fft` is unavailable unless BLAS provider is MKL. This attribute allows for easy detection of its availability.
     blasProvider = blas.provider;
     # To help debug when a package is broken due to CUDA support

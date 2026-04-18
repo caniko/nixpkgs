@@ -5,8 +5,27 @@
   ...
 }:
 let
-
+  inherit (lib)
+    literalExpression
+    mkDefault
+    mkIf
+    mkOption
+    types
+    ;
   cfg = config.services.surrealdb;
+
+  backendToDbPath =
+    backend:
+    if backend == "rocksdb" then
+      "rocksdb:///var/lib/surrealdb/"
+    else if backend == "memory" then
+      "memory"
+    else
+      "surrealkv:///var/lib/surrealdb/";
+
+  defaultPackage = if cfg.backend == "rocksdb" then pkgs.surrealdb-rocksdb else pkgs.surrealdb;
+
+  effectiveDbPath = if cfg.dbPath != null then cfg.dbPath else backendToDbPath cfg.backend;
 in
 {
 
@@ -16,18 +35,41 @@ in
 
       package = lib.mkPackageOption pkgs "surrealdb" { };
 
-      dbPath = lib.mkOption {
-        type = lib.types.str;
+      backend = mkOption {
+        type = types.enum [
+          "surrealkv"
+          "rocksdb"
+          "memory"
+        ];
+        default = "surrealkv";
         description = ''
-          The path that surrealdb will write data to. Use null for in-memory.
-          Can be one of "memory", "rocksdb://:path", "surrealkv://:path", "tikv://:addr", "fdb://:addr".
+          Storage backend to use when `dbPath` is not set. `surrealkv` is the
+          default, `rocksdb` switches to the RocksDB-enabled package variant,
+          and `memory` runs without on-disk persistence.
         '';
-        default = "surrealkv:///var/lib/surrealdb/";
+      };
+
+      dbPath = mkOption {
+        type = types.nullOr types.str;
+        description = ''
+          Raw datastore URI passed to `surreal start`. If unset, derive it from
+          `backend`. The packaged defaults cover `surrealkv:///...`,
+          `rocksdb:///...`, and `memory`; other URI schemes require a custom
+          `package` that enables the corresponding backend.
+        '';
+        default = null;
+        defaultText = literalExpression ''
+          if config.services.surrealdb.backend == "rocksdb"
+          then "rocksdb:///var/lib/surrealdb/"
+          else if config.services.surrealdb.backend == "memory"
+          then "memory"
+          else "surrealkv:///var/lib/surrealdb/"
+        '';
         example = "memory";
       };
 
-      host = lib.mkOption {
-        type = lib.types.str;
+      host = mkOption {
+        type = types.str;
         description = ''
           The host that surrealdb will connect to.
         '';
@@ -35,8 +77,8 @@ in
         example = "127.0.0.1";
       };
 
-      port = lib.mkOption {
-        type = lib.types.port;
+      port = mkOption {
+        type = types.port;
         description = ''
           The port that surrealdb will connect to.
         '';
@@ -44,8 +86,8 @@ in
         example = 8000;
       };
 
-      extraFlags = lib.mkOption {
-        type = lib.types.listOf lib.types.str;
+      extraFlags = mkOption {
+        type = types.listOf types.str;
         default = [ ];
         example = [
           "--allow-all"
@@ -61,7 +103,8 @@ in
     };
   };
 
-  config = lib.mkIf cfg.enable {
+  config = mkIf cfg.enable {
+    services.surrealdb.package = mkDefault defaultPackage;
 
     # Used to connect to the running service
     environment.systemPackages = [ cfg.package ];
@@ -72,7 +115,7 @@ in
       after = [ "network.target" ];
 
       serviceConfig = {
-        ExecStart = "${cfg.package}/bin/surreal start --bind ${cfg.host}:${toString cfg.port} ${lib.strings.concatStringsSep " " cfg.extraFlags} -- ${cfg.dbPath}";
+        ExecStart = "${cfg.package}/bin/surreal start --bind ${cfg.host}:${toString cfg.port} ${lib.strings.concatStringsSep " " cfg.extraFlags} -- ${effectiveDbPath}";
         DynamicUser = true;
         Restart = "on-failure";
         StateDirectory = "surrealdb";

@@ -7,9 +7,22 @@
   rocksdb,
   testers,
   protobuf,
+  withRocksDB ? false,
 }:
+let
+  cargoBuildFeatures = [
+    "allocator"
+    "allocation-tracking"
+    "http"
+    "scripting"
+    "storage-mem"
+    "storage-surrealcs"
+    "storage-surrealkv"
+  ]
+  ++ lib.optional withRocksDB "storage-rocksdb";
+in
 rustPlatform.buildRustPackage (finalAttrs: {
-  pname = "surrealdb";
+  pname = if withRocksDB then "surrealdb-rocksdb" else "surrealdb";
   version = "2.6.1";
 
   src = fetchFromGitHub {
@@ -26,14 +39,17 @@ rustPlatform.buildRustPackage (finalAttrs: {
     rm .cargo/config.toml
   '';
 
+  buildNoDefaultFeatures = true;
+  buildFeatures = cargoBuildFeatures;
+
   env = {
     PROTOC = "${protobuf}/bin/protoc";
     PROTOC_INCLUDE = "${protobuf}/include";
-
+    RUSTFLAGS = "--cfg surrealdb_unstable";
+  }
+  // lib.optionalAttrs withRocksDB {
     ROCKSDB_INCLUDE_DIR = "${rocksdb}/include";
     ROCKSDB_LIB_DIR = "${rocksdb}/lib";
-
-    RUSTFLAGS = "--cfg surrealdb_unstable";
   };
 
   nativeBuildInputs = [
@@ -53,6 +69,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
   ];
 
   __darwinAllowLocalNetworking = true;
+  __structuredAttrs = true;
 
   passthru.tests.version = testers.testVersion {
     package = finalAttrs.finalPackage;

@@ -22,7 +22,7 @@ in
           The path that surrealdb will write data to. Use null for in-memory.
           Can be one of "memory", "rocksdb://:path", "surrealkv://:path", "tikv://:addr", "fdb://:addr".
         '';
-        default = "rocksdb:///var/lib/surrealdb/";
+        default = "surrealkv:///var/lib/surrealdb/";
         example = "memory";
       };
 

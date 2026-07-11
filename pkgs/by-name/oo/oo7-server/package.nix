@@ -18,6 +18,8 @@ stdenv.mkDerivation (finalAttrs: {
   sourceRoot = "${finalAttrs.src.name}/server";
   cargoRoot = "../";
 
+  patches = [ ./resolve-aliases-in-set-locked.patch ];
+
   nativeBuildInputs = [
     pkg-config
     meson

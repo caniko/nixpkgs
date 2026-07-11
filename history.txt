@@ -1,0 +1,7 @@
+#V2
+CREATE person:test SET name = "rocks";
+SELECT name FROM person:test;
+CREATE person:test SET name = "codex";
+SELECT name FROM person:test;
+CREATE person:test SET name = "rocks";
+SELECT name FROM person:test;

@@ -5,12 +5,12 @@ import hashlib
 import importlib.util
 import json
 import os
-from pathlib import Path
 import re
 import shlex
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 
 def check_desktop_handler(package: Path, source: Path, temporary: Path) -> None:
@@ -34,8 +34,10 @@ def check_desktop_handler(package: Path, source: Path, temporary: Path) -> None:
     assert shlex.split(entry["Desktop Entry"]["Exec"]) == ["vortex-nxm", "%u"]
     assert "x-scheme-handler/nxm" in entry["Desktop Entry"]["MimeType"].split(";")
     assert entry["Desktop Entry"].getboolean("NoDisplay")
+    entry.clear()
     entry.read(application)
     assert shlex.split(entry["Desktop Entry"]["Exec"]) == ["vortex"]
+    assert not entry["Desktop Entry"].getboolean("NoDisplay", fallback=False)
 
     # Exercise the installed NXM wrapper, replacing only its Electron-launching
     # target with an argument recorder so no GUI session is needed.

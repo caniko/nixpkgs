@@ -352,7 +352,7 @@ stdenv.mkDerivation (finalAttrs: {
       ];
     })
     (makeDesktopItem {
-      name = "vortex-nxm";
+      name = "com.nexusmods.vortex";
       desktopName = "Vortex NXM Handler";
       noDisplay = true;
       exec = "vortex-nxm %u";

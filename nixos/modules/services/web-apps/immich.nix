@@ -50,28 +50,6 @@ let
     mkOption
     mkEnableOption
     ;
-
-  postgresqlPackage =
-    if cfg.database.enable then config.services.postgresql.package else pkgs.postgresql;
-
-  machineLearningPackage =
-    if cfg.machine-learning.acceleration != null then
-      cfg.package.machine-learning.override (prevArgs: {
-        python3 = prevArgs.python3.override (prevPythonArgs: {
-          packageOverrides = lib.composeExtensions (prevPythonArgs.packageOverrides or (_: _: { })) (
-            _: pyPrev: {
-              onnxruntime = pyPrev.onnxruntime.override (prevOnnxArgs: {
-                onnxruntime = prevOnnxArgs.onnxruntime.override {
-                  cudaSupport = cfg.machine-learning.acceleration == "cuda";
-                  rocmSupport = cfg.machine-learning.acceleration == "rocm";
-                };
-              });
-            }
-          );
-        });
-      })
-    else
-      cfg.package.machine-learning;
 in
 {
   imports = [
@@ -156,7 +134,15 @@ in
     host = mkOption {
       type = types.str;
       default = "localhost";
-      description = "The host that immich will listen on.";
+      example = ""; # all interfaces
+      # hint: the use of "" for IMMICH_HOST is not documented
+      # see https://docs.immich.app/install/environment-variables/#ports
+      # or https://github.com/immich-app/immich/blob/767caf9bfec2ec74ebdef6f58643ee9505da8550/docs/docs/install/environment-variables.md?plain=1#L70
+      # impl: https://github.com/immich-app/immich/blob/60f4dedb2991c8356d2977f1dc9cfa2cf666788c/server/src/app.common.ts#L90
+      description = ''
+        The host that immich will listen on.
+        Set to an empty string (`""`) to listen on all interfaces.
+      '';
     };
     port = mkOption {
       type = types.port;
@@ -217,31 +203,6 @@ in
         // {
           default = true;
         };
-      acceleration = mkOption {
-        type = types.nullOr (
-          types.enum [
-            "cuda"
-            "rocm"
-          ]
-        );
-        default = null;
-        example = "cuda";
-        description = ''
-          Hardware acceleration backend for Immich machine learning.
-
-          When set, this sets `DEVICE` to the selected backend and runs Immich machine learning with an `onnxruntime` package built with the matching accelerator support.
-        '';
-      };
-      hsaGfxVersion = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        example = "11.0.0";
-        description = ''
-          Override what ROCm detects the GPU model as for Immich machine learning.
-
-          This sets `HSA_OVERRIDE_GFX_VERSION` when non-null. Leave this as `null` to preserve native ROCm gfx detection. For example, RX 7900 XTX users may need `"11.0.0"`.
-        '';
-      };
       environment = mkOption {
         type = types.submodule { freeformType = types.attrsOf types.str; };
         default = { };
@@ -271,7 +232,7 @@ in
         // {
           default = true;
         };
-      createDB = mkEnableOption "the automatic creation of the database for immich." // {
+      createDB = mkEnableOption "the automatic creation of the database for immich" // {
         default = true;
       };
       name = mkOption {
@@ -294,6 +255,29 @@ in
         type = types.str;
         default = "immich";
         description = "The database user for immich.";
+      };
+      package = mkOption {
+        type = types.package;
+        default =
+          if config.services.postgresql.enable then config.services.postgresql.package else pkgs.postgresql;
+        defaultText = lib.literalExpression ''
+          if config.services.postgresql.enable then
+            config.services.postgresql.package
+          else
+            pkgs.postgresql
+        '';
+        example = lib.literalExpression "pkgs.postgresql_18";
+        description = ''
+          The postgresql package providing the client programs that immich uses,
+          most notably the `pg_dumpall` of its database backup job.
+
+          These programs refuse to talk to a server that is newer than
+          themselves, so this must not be older than the server reachable at
+          {option}`services.immich.database.host`. It is derived from
+          {option}`services.postgresql.package` whenever the postgresql module
+          is enabled on this host; set it explicitly when the database lives on
+          another machine.
+        '';
       };
     };
     redis = {
@@ -320,11 +304,6 @@ in
         assertion = !isPostgresUnixSocket -> cfg.secretsFile != null;
         message = "A secrets file containing at least the database password must be provided when unix sockets are not used.";
       }
-      {
-        assertion =
-          cfg.machine-learning.hsaGfxVersion == null || cfg.machine-learning.acceleration == "rocm";
-        message = "`services.immich.machine-learning.hsaGfxVersion` can only be set when `services.immich.machine-learning.acceleration` is `\"rocm\"`.";
-      }
     ];
 
     services.postgresql = mkIf cfg.database.enable {
@@ -346,41 +325,43 @@ in
         search_path = "\"$user\", public, vectors";
       };
     };
-    systemd.services.postgresql-setup.serviceConfig.ExecStartPost =
-      let
-        extensions = [
-          "unaccent"
-          "uuid-ossp"
-          "cube"
-          "earthdistance"
-          "pg_trgm"
-          "vector"
-          "vchord"
+    systemd.services.postgresql-setup = mkIf cfg.database.enable {
+      serviceConfig.ExecStartPost =
+        let
+          extensions = [
+            "unaccent"
+            "uuid-ossp"
+            "cube"
+            "earthdistance"
+            "pg_trgm"
+            "vector"
+            "vchord"
+          ];
+          sqlFile = pkgs.writeText "immich-pgvectors-setup.sql" ''
+            -- save previous version of vectorchord to trigger reindex on update
+            SELECT COALESCE(installed_version, ''') AS vchord_version_before FROM pg_available_extensions WHERE name = 'vchord' \gset
+
+            ${lib.concatMapStringsSep "\n" (ext: "CREATE EXTENSION IF NOT EXISTS \"${ext}\";") extensions}
+            ${lib.concatMapStringsSep "\n" (ext: "ALTER EXTENSION \"${ext}\" UPDATE;") extensions}
+            ALTER SCHEMA public OWNER TO ${cfg.database.user};
+
+            -- trigger reindex if vectorchord updates
+            -- https://docs.immich.app/administration/postgres-standalone/#updating-vectorchord
+            SELECT COALESCE(installed_version, ''') AS vchord_version_after FROM pg_available_extensions WHERE name = 'vchord' \gset
+
+            SELECT (:'vchord_version_before' != ''' AND :'vchord_version_before' != :'vchord_version_after') AS has_vchord_updated \gset
+            \if :has_vchord_updated
+              REINDEX INDEX face_index;
+              REINDEX INDEX clip_index;
+            \endif
+          '';
+        in
+        [
+          ''
+            ${lib.getExe' cfg.database.package "psql"} -d "${cfg.database.name}" -f "${sqlFile}"
+          ''
         ];
-        sqlFile = pkgs.writeText "immich-pgvectors-setup.sql" ''
-          -- save previous version of vectorchord to trigger reindex on update
-          SELECT COALESCE(installed_version, ''') AS vchord_version_before FROM pg_available_extensions WHERE name = 'vchord' \gset
-
-          ${lib.concatMapStringsSep "\n" (ext: "CREATE EXTENSION IF NOT EXISTS \"${ext}\";") extensions}
-          ${lib.concatMapStringsSep "\n" (ext: "ALTER EXTENSION \"${ext}\" UPDATE;") extensions}
-          ALTER SCHEMA public OWNER TO ${cfg.database.user};
-
-          -- trigger reindex if vectorchord updates
-          -- https://docs.immich.app/administration/postgres-standalone/#updating-vectorchord
-          SELECT COALESCE(installed_version, ''') AS vchord_version_after FROM pg_available_extensions WHERE name = 'vchord' \gset
-
-          SELECT (:'vchord_version_before' != ''' AND :'vchord_version_before' != :'vchord_version_after') AS has_vchord_updated \gset
-          \if :has_vchord_updated
-            REINDEX INDEX face_index;
-            REINDEX INDEX clip_index;
-          \endif
-        '';
-      in
-      [
-        ''
-          ${lib.getExe' postgresqlPackage "psql"} -d "${cfg.database.name}" -f "${sqlFile}"
-        ''
-      ];
+    };
 
     services.redis.servers = mkIf cfg.redis.enable {
       immich = {
@@ -432,12 +413,6 @@ in
       XDG_CACHE_HOME = "/var/cache/immich";
       IMMICH_HOST = "localhost";
       IMMICH_PORT = "3003";
-    }
-    // lib.optionalAttrs (cfg.machine-learning.acceleration != null) {
-      DEVICE = cfg.machine-learning.acceleration;
-    }
-    // lib.optionalAttrs (cfg.machine-learning.hsaGfxVersion != null) {
-      HSA_OVERRIDE_GFX_VERSION = cfg.machine-learning.hsaGfxVersion;
     };
 
     systemd.slices.system-immich = {
@@ -454,7 +429,7 @@ in
       path = [
         # gzip and pg_dumpall are used by the backup service
         pkgs.gzip
-        postgresqlPackage
+        cfg.database.package
       ];
 
       preStart = mkIf (cfg.settings != null) secretsReplacement.script;
@@ -483,7 +458,7 @@ in
       wantedBy = [ "multi-user.target" ];
       inherit (cfg.machine-learning) environment;
       serviceConfig = commonServiceConfig // {
-        ExecStart = lib.getExe machineLearningPackage;
+        ExecStart = lib.getExe cfg.package.machine-learning;
         Slice = "system-immich.slice";
         CacheDirectory = "immich";
         User = cfg.user;

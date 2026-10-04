@@ -2,6 +2,7 @@
   lib,
   stdenv,
   autoPatchelfHook,
+  callPackage,
   copyDesktopItems,
   dotnetCorePackages,
   electron_43,
@@ -359,7 +360,10 @@ stdenv.mkDerivation (finalAttrs: {
     })
   ];
 
-  passthru.updateScript = ./update.sh;
+  passthru = {
+    updateScript = ./update.sh;
+    tests.packaging = callPackage ./tests.nix { vortex = finalAttrs.finalPackage; };
+  };
 
   meta = {
     description = "Open-source mod manager from Nexus Mods";

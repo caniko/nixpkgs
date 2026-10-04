@@ -199,7 +199,7 @@ stdenv.mkDerivation (finalAttrs: {
     substituteInPlace src/main/package.json \
       --replace-fail '"version": "1.0.0"' '"version": "${finalAttrs.version}"'
 
-    # Packaged NXM handler is vortex-nxm.desktop; do not write a user-local one.
+    # Use the packaged com.nexusmods.vortex.desktop handler; do not create a user-local one.
     substituteInPlace src/renderer/src/util/protocolRegistration/linux/nxm.ts \
       --replace-fail \
         'return process.defaultApp === true || process.env.NODE_ENV === "development";' \

@@ -34,6 +34,7 @@
   udev,
   alsa-lib,
   libGL,
+  libva,
   libsecret,
   nix-update-script,
   autoPatchelfHook,
@@ -199,6 +200,7 @@ buildDotnetModule (finalAttrs: {
     cairo
     udev
     libGL
+    libva
     libsecret
   ];
 
